@@ -360,7 +360,12 @@ class PyArrayResultHandler {
   bool committed() const { return committed_; }
   bool skip_checks() const { return skip_checks_; }
 
+  static PyType_Slot slots_[];
+
  private:
+  static int tp_traverse(PyObject* self, visitproc visit, void* arg);
+  static int tp_clear(PyObject* self);
+
   nanobind::object aval_;
   nanobind::object sharding_;
   bool weak_type_;

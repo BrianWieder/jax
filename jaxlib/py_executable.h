@@ -16,6 +16,8 @@ limitations under the License.
 #ifndef JAXLIB_PY_EXECUTABLE_H_
 #define JAXLIB_PY_EXECUTABLE_H_
 
+#include <Python.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -266,6 +268,10 @@ class PyLoadedExecutable {
 
  private:
   friend class PyClient;
+
+  static int tp_traverse(PyObject* self, visitproc visit, void* arg);
+  static int tp_clear(PyObject* self);
+  static PyType_Slot slots_[];
 
   nb_class_ptr<PyClient> client_;
   xla::ifrt::LoadedExecutableRef ifrt_loaded_executable_;

@@ -23,6 +23,7 @@ limitations under the License.
 #include <set>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "absl/container/inlined_vector.h"
@@ -456,8 +457,51 @@ PyDeviceList::MemoryKinds(nb_class_ptr<PyDeviceList> self) {
   return (*self->memory_kind_info_)->default_memory_kind;
 }
 
+/*static*/ int PyDeviceList::tp_traverse(PyObject* self, visitproc visit,
+                                         void* arg) {
+  // https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_traverse
+  Py_VISIT(Py_TYPE(self));
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  PyDeviceList* l = nb::inst_ptr<PyDeviceList>(self);
+  Py_VISIT(l->py_client_.ptr());
+  if (auto* py_device_assignment = std::get_if<nb::tuple>(&l->device_list_)) {
+    Py_VISIT(py_device_assignment->ptr());
+  }
+  if (l->addressable_device_list_.has_value()) {
+    Py_VISIT(l->addressable_device_list_->ptr());
+  }
+  if (l->memory_kind_info_.has_value() && l->memory_kind_info_->ok()) {
+    Py_VISIT((*l->memory_kind_info_)->default_memory_kind.ptr());
+    Py_VISIT((*l->memory_kind_info_)->memory_kinds.ptr());
+  }
+  return 0;
+}
+
+/*static*/ int PyDeviceList::tp_clear(PyObject* self) {
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  PyDeviceList* l = nb::inst_ptr<PyDeviceList>(self);
+  l->py_client_.reset();
+  if (auto* py_device_assignment = std::get_if<nb::tuple>(&l->device_list_)) {
+    py_device_assignment->reset();
+  }
+  l->addressable_device_list_.reset();
+  l->memory_kind_info_.reset();
+  return 0;
+}
+
+/*static*/ PyType_Slot PyDeviceList::slots_[] = {
+    {Py_tp_traverse, (void*)PyDeviceList::tp_traverse},
+    {Py_tp_clear, (void*)PyDeviceList::tp_clear},
+    {0, nullptr},
+};
+
 /*static*/ void PyDeviceList::Register(nb::module_& m) {
-  nb::class_<PyDeviceList>(m, "DeviceList")
+  nb::class_<PyDeviceList>(m, "DeviceList",
+                           nb::type_slots(PyDeviceList::slots_))
       .def(nb::init<nb::typed<nb::tuple, PyDevice, nb::ellipsis>>())
       .def("__hash__", &PyDeviceList::Hash, nb::lock_self())
       .def("__eq__", &PyDeviceList::Equal)

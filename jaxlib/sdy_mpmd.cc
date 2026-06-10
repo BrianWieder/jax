@@ -487,8 +487,9 @@ NB_MODULE(_sdy_mpmd, m) {
       .def_ro("host_output_size_in_bytes",
               &xla::ifrt::IfrtIrProgramMemoryStats::host_output_size_in_bytes);
 
-  auto mpmd_executable =
-      nb::class_<PyMpmdLoadedExecutable>(m, "MpmdLoadedExecutable");
+  auto mpmd_executable = nb::class_<PyMpmdLoadedExecutable>(
+      m, "MpmdLoadedExecutable",
+      nb::type_slots(PyMpmdLoadedExecutable::slots_));
   mpmd_executable.def(
       "execute", xla::ValueOrThrowWrapper(&PyMpmdLoadedExecutable::Execute),
       nb::arg("args"));

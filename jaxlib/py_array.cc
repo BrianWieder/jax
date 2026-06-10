@@ -662,6 +662,41 @@ nanobind::object PyArrayResultHandler::Call(PyArray py_array) const {
               xla::Future<>());
 }
 
+/*static*/ int PyArrayResultHandler::tp_traverse(PyObject* self,
+                                                 visitproc visit, void* arg) {
+  // https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_traverse
+  Py_VISIT(Py_TYPE(self));
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  PyArrayResultHandler* handler = nb::inst_ptr<PyArrayResultHandler>(self);
+  Py_VISIT(handler->aval_.ptr());
+  Py_VISIT(handler->sharding_.ptr());
+  Py_VISIT(handler->dtype_.ptr());
+  for (const nb::callable& wrapper : handler->wrappers_) {
+    Py_VISIT(wrapper.ptr());
+  }
+  return 0;
+}
+
+/*static*/ int PyArrayResultHandler::tp_clear(PyObject* self) {
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  PyArrayResultHandler* handler = nb::inst_ptr<PyArrayResultHandler>(self);
+  handler->aval_.reset();
+  handler->sharding_.reset();
+  handler->dtype_.reset();
+  handler->wrappers_.clear();
+  return 0;
+}
+
+/*static*/ PyType_Slot PyArrayResultHandler::slots_[] = {
+    {Py_tp_traverse, (void*)PyArrayResultHandler::tp_traverse},
+    {Py_tp_clear, (void*)PyArrayResultHandler::tp_clear},
+    {0, nullptr},
+};
+
 PyArray::PyArray(nb::object aval, bool weak_type, xla::nb_dtype dtype,
                  std::vector<int64_t> shape, nb::object sharding,
                  nb_class_ptr<PyClient> py_client, ifrt::ArrayRef ifrt_array,
@@ -2416,7 +2451,8 @@ absl::Status PyArray::Register(nb::module_& m) {
       nb::arg("aval"), nb::arg("sharding"), nb::arg("committed"),
       nb::arg("_skip_checks") = false);
 
-  nb::class_<PyArrayResultHandler>(m, "ResultHandler")
+  nb::class_<PyArrayResultHandler>(m, "ResultHandler",
+                                   nb::type_slots(PyArrayResultHandler::slots_))
       .def(
           "__call__",
           [](const PyArrayResultHandler& self, nb::object arg) {

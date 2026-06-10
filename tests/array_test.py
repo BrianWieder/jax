@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import gc
 import math
 import unittest
 
@@ -26,6 +27,7 @@ from jax._src import core
 from jax._src import op_shardings
 from jax._src import test_util as jtu
 from jax._src import xla_bridge as xb
+from jax._src.lib import jaxlib_extension_version
 from jax._src.lib import xla_client as xc
 from jax._src.util import safe_zip
 from jax._src.mesh import AxisType, AbstractMesh, Mesh
@@ -953,6 +955,36 @@ class ShardingTest(jtu.JaxTestCase):
     self.assertListEqual(hlo_sharding.tile_assignment_dimensions(), [2, 4])
     self.assertListEqual(hlo_sharding.tile_assignment_devices(),
                          [0, 2, 4, 6, 1, 3, 5, 7])
+
+  @unittest.skipIf(jaxlib_extension_version < 467, "Requires jaxlib >= 467")
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_named_sharding_reference_cycle_is_collected(self):
+    mesh = jtu.create_mesh((1,), ('x',))
+    collected = []
+
+    class Canary:
+      def __del__(self):
+        collected.append(True)
+
+    def make_cycles():
+      # A reference cycle through a C++ member of NamedSharding:
+      # canary -> s -> _logical_device_ids -> canary. The cycle is only
+      # collectable if NamedSharding implements the tp_traverse/tp_clear
+      # GC protocol. The mesh must not be part of the cycle since global
+      # caches such as check_pspec's hold strong references to it.
+      canary = Canary()
+      s = NamedSharding(mesh, P('x'), _logical_device_ids=[canary])
+      canary.sharding = s
+      # A reference cycle through the instance __dict__ of NamedSharding:
+      # canary2 -> s2 -> __dict__ -> canary2.
+      canary2 = Canary()
+      s2 = NamedSharding(mesh, P('x'))
+      canary2.sharding = s2
+      s2.canary = canary2
+
+    make_cycles()
+    gc.collect()
+    self.assertLen(collected, 2)
 
   @jtu.thread_unsafe_test()  # cache_info isn't thread-safe
   def test_util_clear_cache(self):

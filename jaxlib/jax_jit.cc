@@ -382,6 +382,53 @@ absl::Status ParseArguments(
   return absl::OkStatus();
 }
 
+namespace {
+
+int ArgumentSignature_tp_traverse(PyObject* self, visitproc visit, void* arg) {
+  // https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_traverse
+  Py_VISIT(Py_TYPE(self));
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  ArgumentSignature* s = nb::inst_ptr<ArgumentSignature>(self);
+  for (const PyTreeDef& treedef : s->dynamic_arg_treedefs) {
+    int rval = treedef.Traverse(visit, arg);
+    if (rval) {
+      return rval;
+    }
+  }
+  for (const nb::str& name : s->dynamic_arg_names) {
+    Py_VISIT(name.ptr());
+  }
+  for (const nb::object& static_arg : s->static_args) {
+    Py_VISIT(static_arg.ptr());
+  }
+  for (const nb::str& name : s->static_arg_names) {
+    Py_VISIT(name.ptr());
+  }
+  return 0;
+}
+
+int ArgumentSignature_tp_clear(PyObject* self) {
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  ArgumentSignature* s = nb::inst_ptr<ArgumentSignature>(self);
+  s->dynamic_arg_treedefs.clear();
+  s->dynamic_arg_names.clear();
+  s->static_args.clear();
+  s->static_arg_names.clear();
+  return 0;
+}
+
+PyType_Slot ArgumentSignature_slots[] = {
+    {Py_tp_traverse, (void*)ArgumentSignature_tp_traverse},
+    {Py_tp_clear, (void*)ArgumentSignature_tp_clear},
+    {0, nullptr},
+};
+
+}  // namespace
+
 void BuildJaxjitSubmodule(nb::module_& m) {
   nb::module_ jitlib = m.def_submodule("jax_jit", "Jax C++ jit library");
 
@@ -417,7 +464,8 @@ void BuildJaxjitSubmodule(nb::module_& m) {
   jitlib.def("_ArgSignatureOfValue",
              xla::ValueOrThrowWrapper(PyArgSignatureOfValue));
 
-  nb::class_<ArgumentSignature> argument_signature(jitlib, "ArgumentSignature");
+  nb::class_<ArgumentSignature> argument_signature(
+      jitlib, "ArgumentSignature", nb::type_slots(ArgumentSignature_slots));
   argument_signature.def_ro("static_args", &ArgumentSignature::static_args)
       .def_ro("static_arg_names", &ArgumentSignature::static_arg_names)
       .def_ro("dynamic_arg_names", &ArgumentSignature::dynamic_arg_names)

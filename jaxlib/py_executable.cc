@@ -572,8 +572,41 @@ void PyLoadedExecutable::KeepAlive(nb::object obj) {
   keepalives_.push_back(std::move(obj));
 }
 
+/*static*/ int PyLoadedExecutable::tp_traverse(PyObject* self, visitproc visit,
+                                               void* arg) {
+  // https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_traverse
+  Py_VISIT(Py_TYPE(self));
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  PyLoadedExecutable* exec = nb::inst_ptr<PyLoadedExecutable>(self);
+  Py_VISIT(exec->client_.ptr());
+  for (const nb::object& keepalive : exec->keepalives_) {
+    Py_VISIT(keepalive.ptr());
+  }
+  return 0;
+}
+
+/*static*/ int PyLoadedExecutable::tp_clear(PyObject* self) {
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  PyLoadedExecutable* exec = nb::inst_ptr<PyLoadedExecutable>(self);
+  // client_ is not cleared: ~PyLoadedExecutable() needs it to unlink this
+  // executable from the client's list of live executables.
+  exec->keepalives_.clear();
+  return 0;
+}
+
+/*static*/ PyType_Slot PyLoadedExecutable::slots_[] = {
+    {Py_tp_traverse, (void*)PyLoadedExecutable::tp_traverse},
+    {Py_tp_clear, (void*)PyLoadedExecutable::tp_clear},
+    {0, nullptr},
+};
+
 void PyLoadedExecutable::Register(nb::module_& m) {
-  nb::class_<PyLoadedExecutable>(m, "LoadedExecutable")
+  nb::class_<PyLoadedExecutable>(m, "LoadedExecutable",
+                                 nb::type_slots(PyLoadedExecutable::slots_))
       .def_prop_ro("client", &PyLoadedExecutable::client)
       .def("local_devices", &PyLoadedExecutable::AddressableDevices)
       .def("get_hlo_text",

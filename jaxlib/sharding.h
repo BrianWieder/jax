@@ -98,7 +98,12 @@ class NamedSharding : public Sharding {
   bool Eq(const nanobind::object& other) const;  // Python __eq__
   nanobind::int_ Hash() const;                   // Python __hash__
 
+  static PyType_Slot slots_[];
+
  private:
+  static int tp_traverse(PyObject* self, visitproc visit, void* arg);
+  static int tp_clear(PyObject* self);
+
   nanobind::object mesh_;
   nanobind::object spec_;
   nanobind::object memory_kind_;
@@ -128,7 +133,12 @@ class SingleDeviceSharding : public Sharding {
     return internal_device_list_;
   }
 
+  static PyType_Slot slots_[];
+
  private:
+  static int tp_traverse(PyObject* self, visitproc visit, void* arg);
+  static int tp_clear(PyObject* self);
+
   nanobind::object device_;
   nanobind::object memory_kind_;
   nb_class_ptr<PyDeviceList> internal_device_list_;
@@ -185,7 +195,12 @@ class GSPMDSharding : public Sharding {
     return internal_device_list_;
   }
 
+  static PyType_Slot slots_[];
+
  private:
+  static int tp_traverse(PyObject* self, visitproc visit, void* arg);
+  static int tp_clear(PyObject* self);
+
   size_t CalculateHash() const {
     // We only hash `hlo_sharding_` here for performance.
     return absl::Hash<xla::HloSharding>()(hlo_sharding_);

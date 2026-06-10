@@ -16,6 +16,8 @@ limitations under the License.
 #ifndef JAXLIB_PY_DEVICE_LIST_H_
 #define JAXLIB_PY_DEVICE_LIST_H_
 
+#include <Python.h>
+
 #include <cstdint>
 #include <optional>
 #include <set>
@@ -77,6 +79,10 @@ class PyDeviceList {
   static void Register(nanobind::module_& m);
 
  private:
+  static int tp_traverse(PyObject* self, visitproc visit, void* arg);
+  static int tp_clear(PyObject* self);
+  static PyType_Slot slots_[];
+
   nanobind::tuple AsTuple() const;
 
   // Methods below require GIL.

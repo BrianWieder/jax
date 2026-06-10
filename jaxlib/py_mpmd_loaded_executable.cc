@@ -389,5 +389,50 @@ void PyMpmdLoadedExecutable::SetupFastpath(nb::callable cache_miss,
       nb::handle(pytree_registry.ptr()));
 }
 
+/*static*/ int PyMpmdLoadedExecutable::tp_traverse(PyObject* self,
+                                                   visitproc visit, void* arg) {
+  // https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_traverse
+  Py_VISIT(Py_TYPE(self));
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  PyMpmdLoadedExecutable* exec = nb::inst_ptr<PyMpmdLoadedExecutable>(self);
+  Py_VISIT(exec->backend_.ptr());
+  for (const nb::object& aval : exec->out_avals_) {
+    Py_VISIT(aval.ptr());
+  }
+  for (const nb::object& dtype : exec->out_dtypes_) {
+    Py_VISIT(dtype.ptr());
+  }
+  for (const nb::object& sharding : exec->out_shardings_) {
+    Py_VISIT(sharding.ptr());
+  }
+  Py_VISIT(exec->cache_miss_.ptr());
+  Py_VISIT(exec->pytree_registry_.ptr());
+  // cache_ is not traversed: it is guarded by a mutex, which must not be
+  // acquired during garbage collection.
+  return 0;
+}
+
+/*static*/ int PyMpmdLoadedExecutable::tp_clear(PyObject* self) {
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  PyMpmdLoadedExecutable* exec = nb::inst_ptr<PyMpmdLoadedExecutable>(self);
+  exec->backend_.reset();
+  exec->out_avals_.clear();
+  exec->out_dtypes_.clear();
+  exec->out_shardings_.clear();
+  exec->cache_miss_.reset();
+  exec->pytree_registry_.reset();
+  return 0;
+}
+
+/*static*/ PyType_Slot PyMpmdLoadedExecutable::slots_[] = {
+    {Py_tp_traverse, (void*)PyMpmdLoadedExecutable::tp_traverse},
+    {Py_tp_clear, (void*)PyMpmdLoadedExecutable::tp_clear},
+    {0, nullptr},
+};
+
 }  // namespace mpmd
 }  // namespace jax
