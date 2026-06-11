@@ -162,10 +162,16 @@ PyObject* WeakKeyWeakValueCache::VectorCall(PyObject* self_obj,
     return 0;
   }
   WeakKeyWeakValueCache* self = nb::inst_ptr<WeakKeyWeakValueCache>(self_obj);
+  // Move the members into locals so that the decrefs at scope exit, which
+  // may run arbitrary Python code via finalizers, never observe this object
+  // in a partially cleared state.
+  // See https://github.com/python/cpython/issues/99537.
+  std::function<nb::object(nb::handle)> fn = std::move(self->fn_);
   self->fn_ = nullptr;
-  self->py_fn_.reset();
-  self->weakref_callback_.reset();
-  self->entries_.clear();
+  nb::callable py_fn = std::move(self->py_fn_);
+  nb::callable weakref_callback = std::move(self->weakref_callback_);
+  decltype(self->entries_) entries;
+  entries.swap(self->entries_);
   self->weakref_to_key_.clear();
   return 0;
 }

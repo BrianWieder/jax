@@ -21,6 +21,7 @@ limitations under the License.
 #include <exception>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_map.h"
@@ -238,8 +239,17 @@ int WeakValueInterner::tp_traverse(PyObject* self_obj, visitproc visit,
 
 int WeakValueInterner::tp_clear(PyObject* self_obj) {
   WeakValueInterner* self = nb::inst_ptr<WeakValueInterner>(self_obj);
-  self->fn_.reset();
-  self->weakref_callback_.reset();
+  // Move the members into locals so that the decrefs at scope exit, which
+  // may run arbitrary Python code via finalizers, never observe this object
+  // in a partially cleared state.
+  // See https://github.com/python/cpython/issues/99537.
+  nb::callable fn = std::move(self->fn_);
+  nb::callable weakref_callback = std::move(self->weakref_callback_);
+  std::vector<std::pair<Key, std::shared_ptr<Entry>>> entries;
+  entries.reserve(self->entries_.size());
+  for (auto& kv : self->entries_) {
+    entries.emplace_back(std::move(kv.first), std::move(kv.second));
+  }
   self->entries_.clear();
   self->reverse_index_.clear();
   return 0;

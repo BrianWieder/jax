@@ -941,10 +941,15 @@ int WeakrefLRUCacheBase::TpTraverse(visitproc visit, void* arg) {
 
 void WeakrefLRUCacheBase::TpClear() {
   Clear();
-  cache_context_fn_.reset();
-  fn_.reset();
-  explain_ = std::nullopt;
-  weakref_callback_.reset();
+  // Move the members into locals so that the decrefs at scope exit, which
+  // may run arbitrary Python code via finalizers, never observe this object
+  // in a partially cleared state.
+  // See https://github.com/python/cpython/issues/99537.
+  nb::callable cache_context_fn = std::move(cache_context_fn_);
+  nb::callable fn = std::move(fn_);
+  std::optional<nb::callable> explain;
+  explain.swap(explain_);
+  nb::object weakref_callback = std::move(weakref_callback_);
 }
 
 // WeakrefLRUCache is a cache where the first `num_weak_keys` positional
