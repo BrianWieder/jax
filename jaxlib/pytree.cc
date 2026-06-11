@@ -458,8 +458,16 @@ nb::object PyTreeRegistry::FlattenOneLevelImpl(nb::handle x,
 
 /* static */ int PyTreeRegistry::tp_clear(PyObject* self) {
   PyTreeRegistry* registry = nb::inst_ptr<PyTreeRegistry>(self);
-  nb::ft_lock_guard lock(registry->mu_);
-  registry->registrations_.clear();
+  // Swap the registrations into a local declared before the lock guard so
+  // that the decrefs at scope exit, which may run arbitrary Python code via
+  // finalizers, happen after the lock is released and never observe this
+  // object in a partially cleared state.
+  // See https://github.com/python/cpython/issues/99537.
+  decltype(registry->registrations_) registrations;
+  {
+    nb::ft_lock_guard lock(registry->mu_);
+    registrations.swap(registry->registrations_);
+  }
   return 0;
 }
 
@@ -1670,8 +1678,13 @@ int PyTreeDef::Traverse(visitproc visit, void* arg) const {
 
 /* static */ int PyTreeDef::tp_clear(PyObject* self) {
   PyTreeDef* treedef = nb::inst_ptr<PyTreeDef>(self);
-  treedef->registry_ref_.reset();
-  treedef->traversal_.clear();
+  // Move the members into locals so that the decrefs at scope exit, which
+  // may run arbitrary Python code via finalizers, never observe this object
+  // in a partially cleared state.
+  // See https://github.com/python/cpython/issues/99537.
+  nb_class_ptr<PyTreeRegistry> registry_ref = std::move(treedef->registry_ref_);
+  decltype(treedef->traversal_) traversal;
+  traversal.swap(treedef->traversal_);
   return 0;
 }
 

@@ -389,5 +389,58 @@ void PyMpmdLoadedExecutable::SetupFastpath(nb::callable cache_miss,
       nb::handle(pytree_registry.ptr()));
 }
 
+/*static*/ int PyMpmdLoadedExecutable::tp_traverse(PyObject* self,
+                                                   visitproc visit, void* arg) {
+  // https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_traverse
+  Py_VISIT(Py_TYPE(self));
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  PyMpmdLoadedExecutable* exec = nb::inst_ptr<PyMpmdLoadedExecutable>(self);
+  Py_VISIT(exec->backend_.ptr());
+  for (const nb::object& aval : exec->out_avals_) {
+    Py_VISIT(aval.ptr());
+  }
+  for (const nb::object& dtype : exec->out_dtypes_) {
+    Py_VISIT(dtype.ptr());
+  }
+  for (const nb::object& sharding : exec->out_shardings_) {
+    Py_VISIT(sharding.ptr());
+  }
+  Py_VISIT(exec->cache_miss_.ptr());
+  Py_VISIT(exec->pytree_registry_.ptr());
+  // cache_ is not traversed: it is guarded by a mutex, which must not be
+  // acquired during garbage collection.
+  return 0;
+}
+
+/*static*/ int PyMpmdLoadedExecutable::tp_clear(PyObject* self) {
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  PyMpmdLoadedExecutable* exec = nb::inst_ptr<PyMpmdLoadedExecutable>(self);
+  // Move the members into locals so that the decrefs at scope exit, which
+  // may run arbitrary Python code via finalizers, never observe this object
+  // in a partially cleared state.
+  // See https://github.com/python/cpython/issues/99537.
+  jax::nb_class_ptr<jax::PyClient> backend = std::move(exec->backend_);
+  std::vector<nb::object> out_avals;
+  out_avals.swap(exec->out_avals_);
+  std::vector<nb::object> out_dtypes;
+  out_dtypes.swap(exec->out_dtypes_);
+  std::vector<nb::object> out_shardings;
+  out_shardings.swap(exec->out_shardings_);
+  nb::callable cache_miss = std::move(exec->cache_miss_);
+  jax::nb_class_ptr<jax::PyTreeRegistry> pytree_registry =
+      std::move(exec->pytree_registry_);
+  return 0;
+}
+
+/*static*/ PyType_Slot PyMpmdLoadedExecutable::slots_[] = {
+    {Py_tp_traverse, (void*)PyMpmdLoadedExecutable::tp_traverse},
+    {Py_tp_clear, (void*)PyMpmdLoadedExecutable::tp_clear},
+    {0, nullptr},
+};
+
 }  // namespace mpmd
 }  // namespace jax

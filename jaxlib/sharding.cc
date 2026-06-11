@@ -180,6 +180,72 @@ NamedSharding::NamedSharding(nb::object mesh, nb::object spec,
   type_ = nanobind::type<NamedSharding>().inc_ref().ptr();
 }
 
+// Visits the instance `__dict__`, which nanobind no longer visits for us
+// since we replace the tp_traverse method it installs for dynamic_attr
+// classes.
+static int VisitInstanceDict(PyObject* self, visitproc visit, void* arg) {
+  PyObject** dict = _PyObject_GetDictPtr(self);
+  if (dict) {
+    Py_VISIT(*dict);
+  }
+  return 0;
+}
+
+static void ClearInstanceDict(PyObject* self) {
+  PyObject** dict = _PyObject_GetDictPtr(self);
+  if (dict) {
+    Py_CLEAR(*dict);
+  }
+}
+
+/*static*/ int NamedSharding::tp_traverse(PyObject* self, visitproc visit,
+                                          void* arg) {
+  // https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_traverse
+  Py_VISIT(Py_TYPE(self));
+  int rval = VisitInstanceDict(self, visit, arg);
+  if (rval) {
+    return rval;
+  }
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  NamedSharding* s = nb::inst_ptr<NamedSharding>(self);
+  Py_VISIT(s->mesh_.ptr());
+  Py_VISIT(s->spec_.ptr());
+  Py_VISIT(s->memory_kind_.ptr());
+  Py_VISIT(s->logical_device_ids_.ptr());
+  if (s->internal_device_list_) {
+    Py_VISIT(s->internal_device_list_->ptr());
+  }
+  return s->hash_.tp_traverse(visit, arg);
+}
+
+/*static*/ int NamedSharding::tp_clear(PyObject* self) {
+  ClearInstanceDict(self);
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  NamedSharding* s = nb::inst_ptr<NamedSharding>(self);
+  // Move the members into locals so that the decrefs at scope exit, which
+  // may run arbitrary Python code via finalizers, never observe a dangling
+  // pointer through this object's members.
+  // See https://github.com/python/cpython/issues/99537.
+  nb::object mesh = std::move(s->mesh_);
+  nb::object spec = std::move(s->spec_);
+  nb::object memory_kind = std::move(s->memory_kind_);
+  nb::object logical_device_ids = std::move(s->logical_device_ids_);
+  std::optional<nb_class_ptr<PyDeviceList>> internal_device_list;
+  internal_device_list.swap(s->internal_device_list_);
+  s->hash_.tp_clear();
+  return 0;
+}
+
+/*static*/ PyType_Slot NamedSharding::slots_[] = {
+    {Py_tp_traverse, (void*)NamedSharding::tp_traverse},
+    {Py_tp_clear, (void*)NamedSharding::tp_clear},
+    {0, nullptr},
+};
+
 bool NamedSharding::operator==(const NamedSharding& other) const {
   // Caution: you may need to update EqualShardingsForJit in jax_jit.cc as well.
   return mesh().equal(other.mesh()) && spec().equal(other.spec()) &&
@@ -243,6 +309,44 @@ SingleDeviceSharding::SingleDeviceSharding(nb::object device,
   type_ = nanobind::type<SingleDeviceSharding>().inc_ref().ptr();
 }
 
+/*static*/ int SingleDeviceSharding::tp_traverse(PyObject* self,
+                                                 visitproc visit, void* arg) {
+  Py_VISIT(Py_TYPE(self));
+  int rval = VisitInstanceDict(self, visit, arg);
+  if (rval) {
+    return rval;
+  }
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  SingleDeviceSharding* s = nb::inst_ptr<SingleDeviceSharding>(self);
+  Py_VISIT(s->device_.ptr());
+  Py_VISIT(s->memory_kind_.ptr());
+  Py_VISIT(s->internal_device_list_.ptr());
+  return 0;
+}
+
+/*static*/ int SingleDeviceSharding::tp_clear(PyObject* self) {
+  ClearInstanceDict(self);
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  SingleDeviceSharding* s = nb::inst_ptr<SingleDeviceSharding>(self);
+  // Move the members into locals so that the decrefs at scope exit never
+  // observe a dangling pointer through this object's members.
+  nb::object device = std::move(s->device_);
+  nb::object memory_kind = std::move(s->memory_kind_);
+  nb_class_ptr<PyDeviceList> internal_device_list =
+      std::move(s->internal_device_list_);
+  return 0;
+}
+
+/*static*/ PyType_Slot SingleDeviceSharding::slots_[] = {
+    {Py_tp_traverse, (void*)SingleDeviceSharding::tp_traverse},
+    {Py_tp_clear, (void*)SingleDeviceSharding::tp_clear},
+    {0, nullptr},
+};
+
 SingleDeviceSharding::SingleDeviceSharding(nb_class_ptr<PyClient> client,
                                            xla::ifrt::DeviceListRef device_list,
                                            nb::object memory_kind)
@@ -282,10 +386,49 @@ GSPMDSharding::GSPMDSharding(nb_class_ptr<PyDeviceList> devices,
   type_ = nanobind::type<GSPMDSharding>().inc_ref().ptr();
 }
 
+/*static*/ int GSPMDSharding::tp_traverse(PyObject* self, visitproc visit,
+                                          void* arg) {
+  Py_VISIT(Py_TYPE(self));
+  int rval = VisitInstanceDict(self, visit, arg);
+  if (rval) {
+    return rval;
+  }
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  GSPMDSharding* s = nb::inst_ptr<GSPMDSharding>(self);
+  Py_VISIT(s->devices_.ptr());
+  Py_VISIT(s->memory_kind_.ptr());
+  Py_VISIT(s->internal_device_list_.ptr());
+  return 0;
+}
+
+/*static*/ int GSPMDSharding::tp_clear(PyObject* self) {
+  ClearInstanceDict(self);
+  if (!nb::inst_ready(self)) {
+    return 0;
+  }
+  GSPMDSharding* s = nb::inst_ptr<GSPMDSharding>(self);
+  // Move the members into locals so that the decrefs at scope exit never
+  // observe a dangling pointer through this object's members.
+  nb_class_ptr<PyDeviceList> devices = std::move(s->devices_);
+  nb::object memory_kind = std::move(s->memory_kind_);
+  nb_class_ptr<PyDeviceList> internal_device_list =
+      std::move(s->internal_device_list_);
+  return 0;
+}
+
+/*static*/ PyType_Slot GSPMDSharding::slots_[] = {
+    {Py_tp_traverse, (void*)GSPMDSharding::tp_traverse},
+    {Py_tp_clear, (void*)GSPMDSharding::tp_clear},
+    {0, nullptr},
+};
+
 void RegisterSharding(nb::module_& m) {
   nb::class_<Sharding>(m, "Sharding").def(nb::init<>());
 
-  nb::class_<NamedSharding, Sharding>(m, "NamedSharding", nb::dynamic_attr())
+  nb::class_<NamedSharding, Sharding>(m, "NamedSharding", nb::dynamic_attr(),
+                                      nb::type_slots(NamedSharding::slots_))
       .def(nb::init<nb::object, nb::object, nb::object, nb::object>(),
            nb::arg("mesh"), nb::arg("spec"),
            nb::arg("memory_kind").none() = nb::none(),
@@ -302,8 +445,9 @@ void RegisterSharding(nb::module_& m) {
       .def("__hash__", &NamedSharding::Hash);
   NamedSharding::InitializeType();
 
-  nb::class_<SingleDeviceSharding, Sharding>(m, "SingleDeviceSharding",
-                                             nb::dynamic_attr())
+  nb::class_<SingleDeviceSharding, Sharding>(
+      m, "SingleDeviceSharding", nb::dynamic_attr(),
+      nb::type_slots(SingleDeviceSharding::slots_))
       .def(nb::init<nb::object, nb::object>(), nb::arg("device"),
            nb::arg("memory_kind").none() = nb::none())
       .def_prop_ro("_device", &SingleDeviceSharding::device)
@@ -312,7 +456,8 @@ void RegisterSharding(nb::module_& m) {
                    &SingleDeviceSharding::internal_device_list);
   SingleDeviceSharding::InitializeType();
 
-  nb::class_<GSPMDSharding, Sharding>(m, "GSPMDSharding", nb::dynamic_attr())
+  nb::class_<GSPMDSharding, Sharding>(m, "GSPMDSharding", nb::dynamic_attr(),
+                                      nb::type_slots(GSPMDSharding::slots_))
       // NOTE: We explicitly list the two PyDeviceList ctors first since they
       // are the fast path and PyDeviceList conforms to `nb::sequence` so we
       // can silently fall back to the slow sequence ctor(s).

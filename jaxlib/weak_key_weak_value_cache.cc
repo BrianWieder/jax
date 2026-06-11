@@ -60,11 +60,15 @@ nb_class_ptr<WeakKeyWeakValueCache> WeakKeyWeakValueCache::Create(
 
 nb_class_ptr<WeakKeyWeakValueCache> WeakKeyWeakValueCache::Create(
     nb::callable fn) {
-  nb::callable fn_copy = fn;
-  auto self = Create([fn = std::move(fn)](nb::handle x) -> nb::object {
+  // The std::function captures only a borrowed handle; py_fn_ holds the one
+  // owning reference, where it is visible to the garbage collector via
+  // tp_traverse. A second, hidden strong reference inside the std::function
+  // would break the GC's reference accounting and make cycles through the
+  // callable uncollectable.
+  auto self = Create([fn = nb::handle(fn.ptr())](nb::handle x) -> nb::object {
     return fn(x);
   });
-  self->py_fn_ = std::move(fn_copy);
+  self->py_fn_ = std::move(fn);
   return self;
 }
 
@@ -162,10 +166,16 @@ PyObject* WeakKeyWeakValueCache::VectorCall(PyObject* self_obj,
     return 0;
   }
   WeakKeyWeakValueCache* self = nb::inst_ptr<WeakKeyWeakValueCache>(self_obj);
+  // Move the members into locals so that the decrefs at scope exit, which
+  // may run arbitrary Python code via finalizers, never observe this object
+  // in a partially cleared state.
+  // See https://github.com/python/cpython/issues/99537.
+  std::function<nb::object(nb::handle)> fn = std::move(self->fn_);
   self->fn_ = nullptr;
-  self->py_fn_.reset();
-  self->weakref_callback_.reset();
-  self->entries_.clear();
+  nb::callable py_fn = std::move(self->py_fn_);
+  nb::callable weakref_callback = std::move(self->weakref_callback_);
+  decltype(self->entries_) entries;
+  entries.swap(self->entries_);
   self->weakref_to_key_.clear();
   return 0;
 }

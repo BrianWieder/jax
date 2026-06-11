@@ -16,8 +16,10 @@ import collections
 from collections.abc import Hashable
 import dataclasses
 import functools
+import gc
 import pickle
 import re
+import unittest
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -25,6 +27,8 @@ import jax
 from jax import flatten_util
 from jax import tree_util
 from jax._src import test_util as jtu
+from jax._src.lib import jaxlib_extension_version
+from jax._src.lib import pytree as pytree_lib
 from jax._src.tree_util import (
     prefix_errors, broadcast_flattened_prefix_with_treedef,
     default_registry, dispatch_registry)
@@ -1819,6 +1823,61 @@ class RegistrationTest(jtu.JaxTestCase):
     with self.subTest("with static False"):
       static = jax.tree.static(metadata={"static": False})
       self.assertEqual(static.metadata, {"static": False})
+
+
+@unittest.skipIf(jaxlib_extension_version < 467, "Requires jaxlib >= 467")
+class GcCycleTest(jtu.JaxTestCase):
+  """Tests that reference cycles through C++ pytree objects are collected."""
+
+  def _assert_cycle_collected(self, make_cycle):
+    collected = []
+
+    class Canary:
+      def __del__(self):
+        collected.append(True)
+
+    make_cycle(Canary)
+    gc.collect()
+    self.assertTrue(collected)
+
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_dict_key_reference_cycle_is_collected(self):
+    def make_cycle(canary_cls):
+      canary = canary_cls()
+      key = tree_util.DictKey(canary)
+      # Cycle: canary -> DictKey -> canary.
+      canary.key = key
+
+    self._assert_cycle_collected(make_cycle)
+
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_treedef_reference_cycle_is_collected(self):
+    def make_cycle(canary_cls):
+      class Key:
+        pass
+
+      key = Key()
+      key.canary = canary_cls()
+      treedef = jax.tree.structure({key: 0})
+      # Cycle: key -> treedef -> sorted dict keys -> key.
+      key.treedef = treedef
+
+    self._assert_cycle_collected(make_cycle)
+
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_registry_reference_cycle_is_collected(self):
+    def make_cycle(canary_cls):
+      class Node:
+        pass
+
+      Node.canary = canary_cls()
+      registry = pytree_lib.PyTreeRegistry()
+      registry.register_node(
+          Node, lambda n: ((), None), lambda aux, children: Node())
+      # Cycle: Node -> registry -> registration type -> Node.
+      Node.registry = registry
+
+    self._assert_cycle_collected(make_cycle)
 
 
 if __name__ == "__main__":

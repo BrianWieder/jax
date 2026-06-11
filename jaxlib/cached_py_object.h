@@ -52,6 +52,19 @@ class CachedPyObject {
     }
   }
 
+  // Helpers for the tp_traverse and tp_clear slots of an enclosing Python
+  // object.
+  int tp_traverse(visitproc visit, void* arg) const {
+    PyObject* value = value_.load();
+    Py_VISIT(value);
+    return 0;
+  }
+
+  void tp_clear() {
+    PyObject* value = value_.exchange(nullptr);
+    Py_XDECREF(value);
+  }
+
  private:
   std::atomic<PyObject*> value_ = nullptr;
 };

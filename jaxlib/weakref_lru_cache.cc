@@ -941,10 +941,15 @@ int WeakrefLRUCacheBase::TpTraverse(visitproc visit, void* arg) {
 
 void WeakrefLRUCacheBase::TpClear() {
   Clear();
-  cache_context_fn_.reset();
-  fn_.reset();
-  explain_ = std::nullopt;
-  weakref_callback_.reset();
+  // Move the members into locals so that the decrefs at scope exit, which
+  // may run arbitrary Python code via finalizers, never observe this object
+  // in a partially cleared state.
+  // See https://github.com/python/cpython/issues/99537.
+  nb::callable cache_context_fn = std::move(cache_context_fn_);
+  nb::callable fn = std::move(fn_);
+  std::optional<nb::callable> explain;
+  explain.swap(explain_);
+  nb::object weakref_callback = std::move(weakref_callback_);
 }
 
 // WeakrefLRUCache is a cache where the first `num_weak_keys` positional
@@ -1244,8 +1249,10 @@ PyObject* MultiWeakrefLRUCache::VectorCall(PyObject* self_obj,
 /*static*/ int MultiWeakrefLRUCache::tp_clear(PyObject* self_obj) {
   MultiWeakrefLRUCache* self = nb::inst_ptr<MultiWeakrefLRUCache>(self_obj);
   self->TpClear();
-  self->registry_.reset();
-  self->weak_types_.reset();
+  // Move the members into locals so that the decrefs at scope exit never
+  // observe a dangling pointer through this object's members.
+  nb::object registry = std::move(self->registry_);
+  nb::set weak_types = std::move(self->weak_types_);
   return 0;
 }
 

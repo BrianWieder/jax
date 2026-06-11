@@ -13,8 +13,10 @@
 # limitations under the License.
 
 import contextlib
+import gc
 import math
 import unittest
+import weakref
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -26,6 +28,7 @@ from jax._src import core
 from jax._src import op_shardings
 from jax._src import test_util as jtu
 from jax._src import xla_bridge as xb
+from jax._src.lib import jaxlib_extension_version
 from jax._src.lib import xla_client as xc
 from jax._src.util import safe_zip
 from jax._src.mesh import AxisType, AbstractMesh, Mesh
@@ -953,6 +956,216 @@ class ShardingTest(jtu.JaxTestCase):
     self.assertListEqual(hlo_sharding.tile_assignment_dimensions(), [2, 4])
     self.assertListEqual(hlo_sharding.tile_assignment_devices(),
                          [0, 2, 4, 6, 1, 3, 5, 7])
+
+  @unittest.skipIf(jaxlib_extension_version < 467, "Requires jaxlib >= 467")
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_named_sharding_reference_cycle_is_collected(self):
+    mesh = jtu.create_mesh((1,), ('x',))
+    collected = []
+
+    class Canary:
+      def __del__(self):
+        collected.append(True)
+
+    def make_cycles():
+      # A reference cycle through a C++ member of NamedSharding:
+      # canary -> s -> _logical_device_ids -> canary. The cycle is only
+      # collectable if NamedSharding implements the tp_traverse/tp_clear
+      # GC protocol. The mesh must not be part of the cycle since global
+      # caches such as check_pspec's hold strong references to it.
+      canary = Canary()
+      s = NamedSharding(mesh, P('x'), _logical_device_ids=[canary])
+      canary.sharding = s
+      # A reference cycle through the instance __dict__ of NamedSharding:
+      # canary2 -> s2 -> __dict__ -> canary2.
+      canary2 = Canary()
+      s2 = NamedSharding(mesh, P('x'))
+      canary2.sharding = s2
+      s2.canary = canary2
+
+    make_cycles()
+    gc.collect()
+    self.assertLen(collected, 2)
+
+  @unittest.skipIf(jaxlib_extension_version < 467, "Requires jaxlib >= 467")
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_single_device_sharding_reference_cycle_is_collected(self):
+    collected = []
+
+    class Canary:
+      def __del__(self):
+        collected.append(True)
+
+    def make_cycle():
+      # A reference cycle through the instance __dict__ of the C++
+      # SingleDeviceSharding: canary -> s -> __dict__ -> canary.
+      s = SingleDeviceSharding(jax.devices()[0])
+      canary = Canary()
+      canary.sharding = s
+      s.canary = canary
+
+    make_cycle()
+    gc.collect()
+    self.assertTrue(collected)
+
+  @unittest.skipIf(jaxlib_extension_version < 467, "Requires jaxlib >= 467")
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_gspmd_sharding_reference_cycle_is_collected(self):
+    mesh = jtu.create_mesh((1,), ('x',))
+    mps = NamedSharding(mesh, P('x'))
+    collected = []
+
+    class Canary:
+      def __del__(self):
+        collected.append(True)
+
+    def make_cycle():
+      # A reference cycle through the instance __dict__ of the C++
+      # GSPMDSharding: canary -> s -> __dict__ -> canary.
+      s = GSPMDSharding(list(mesh.devices.flat), mps._to_xla_hlo_sharding(1))
+      canary = Canary()
+      canary.sharding = s
+      s.canary = canary
+
+    make_cycle()
+    gc.collect()
+    self.assertTrue(collected)
+
+  @unittest.skipIf(jaxlib_extension_version < 467, "Requires jaxlib >= 467")
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_device_list_reference_cycle_is_collected(self):
+    collected = []
+
+    def make_cycle():
+      # A reference cycle through the duck-typed device tuple held by the
+      # C++ DeviceList: duck_device -> device_list -> tuple -> duck_device.
+      class DuckDevice:
+        def __del__(self):
+          collected.append(True)
+
+      duck_device = DuckDevice()
+      device_list = xc.DeviceList((duck_device,))
+      duck_device.device_list = device_list
+
+    make_cycle()
+    gc.collect()
+    self.assertTrue(collected)
+
+  @unittest.skipIf(jaxlib_extension_version < 467, "Requires jaxlib >= 467")
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_array_result_handler_reference_cycle_is_collected(self):
+    collected = []
+
+    class Canary:
+      def __del__(self):
+        collected.append(True)
+
+    def make_cycle():
+      aval = core.ShapedArray((8,), np.float32)
+      sharding = SingleDeviceSharding(jax.devices()[0])
+      handler = xc.array_result_handler(aval, sharding, committed=True)
+
+      def wrapper(arr):
+        return arr
+
+      # A reference cycle through the wrapper callables held by the C++
+      # ResultHandler: wrapper -> wrapped -> wrappers -> wrapper.
+      wrapped = handler.wrap(wrapper)
+      wrapper.handler = wrapped
+      wrapper.canary = Canary()
+
+    make_cycle()
+    gc.collect()
+    self.assertTrue(collected)
+
+  @unittest.skipIf(jaxlib_extension_version < 467, "Requires jaxlib >= 467")
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_argument_signature_reference_cycle_is_collected(self):
+    from jax._src.tree_util import default_registry
+    jax_jit = xc._xla.jax_jit
+    collected = []
+
+    class Canary:
+      def __del__(self):
+        collected.append(True)
+
+    def make_cycle():
+      canary = Canary()
+      # A reference cycle through the static arguments held by the C++
+      # ArgumentSignature: canary -> signature -> static_args -> canary.
+      signature, _ = jax_jit.parse_arguments(
+          (canary,), [], (), (0,), [], default_registry)
+      canary.signature = signature
+
+    make_cycle()
+    gc.collect()
+    self.assertTrue(collected)
+
+  @unittest.skipIf(jaxlib_extension_version < 467, "Requires jaxlib >= 467")
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_client_device_reference_cycle_is_collected(self):
+    # A throwaway CPU client that is never registered as a jax backend, so
+    # nothing outside its own reference cycles keeps it alive. Materializing
+    # device and memory wrappers creates the intrinsic cycles
+    # client -> device -> client and client -> memory -> client through the
+    # client's wrapper caches.
+    client = xc.make_cpu_client()
+    client_ref = weakref.ref(client)
+    device = client.devices()[0]
+    memory = device.addressable_memories()[0]
+    del client, device, memory
+    gc.collect()
+    self.assertIsNone(client_ref())
+
+  @unittest.skipIf(jaxlib_extension_version < 467, "Requires jaxlib >= 467")
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_cross_type_reference_cycle_is_collected(self):
+    from jax._src.tree_util import default_registry
+    jax_jit = xc._xla.jax_jit
+    collected = []
+
+    def make_cycle():
+      # A reference cycle that spans multiple C++ types:
+      # signature -> static_args -> device_list -> tuple -> duck_device
+      # -> signature.
+      class DuckDevice:
+        def __del__(self):
+          collected.append(True)
+
+      duck_device = DuckDevice()
+      device_list = xc.DeviceList((duck_device,))
+      signature, _ = jax_jit.parse_arguments(
+          (device_list,), [], (), (0,), [], default_registry)
+      duck_device.signature = signature
+
+    make_cycle()
+    gc.collect()
+    self.assertTrue(collected)
+
+  @unittest.skipIf(jaxlib_extension_version < 467, "Requires jaxlib >= 467")
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_loaded_executable_keep_alive_cycle_is_collected(self):
+    collected = []
+
+    class Canary:
+      def __del__(self):
+        collected.append(True)
+
+    def make_cycle():
+      compiled = jax.jit(lambda x: x + 1).lower(np.arange(8.0)).compile()
+      executable = compiled.runtime_executable()
+      canary = Canary()
+      canary.executable = executable
+      # A reference cycle through the keepalives held by the C++
+      # LoadedExecutable: canary -> executable -> keepalives -> canary.
+      executable.keep_alive(canary)
+
+    make_cycle()
+    # Drop cached references to the executable so that the cycle is only
+    # reachable from itself.
+    jax.clear_caches()
+    gc.collect()
+    self.assertTrue(collected)
 
   @jtu.thread_unsafe_test()  # cache_info isn't thread-safe
   def test_util_clear_cache(self):

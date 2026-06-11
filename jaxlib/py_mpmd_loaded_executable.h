@@ -16,6 +16,8 @@ limitations under the License.
 #ifndef JAXLIB_PY_MPMD_LOADED_EXECUTABLE_H_
 #define JAXLIB_PY_MPMD_LOADED_EXECUTABLE_H_
 
+#include <Python.h>
+
 #include <stdbool.h>
 
 #include <cstdint>
@@ -140,6 +142,12 @@ class PyMpmdLoadedExecutable {
                      nb::tuple out_and_fastpath_data);
 
   void SetupFastpath(nb::callable cache_miss, nb::object pytree_registry);
+
+  static PyType_Slot slots_[];
+
+ private:
+  static int tp_traverse(PyObject* self, visitproc visit, void* arg);
+  static int tp_clear(PyObject* self);
 
  protected:
   jax::nb_class_ptr<jax::PyClient> backend_;
