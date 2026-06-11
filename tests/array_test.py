@@ -1102,6 +1102,31 @@ class ShardingTest(jtu.JaxTestCase):
 
   @unittest.skipIf(jaxlib_extension_version < 467, "Requires jaxlib >= 467")
   @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_cross_type_reference_cycle_is_collected(self):
+    from jax._src.tree_util import default_registry
+    jax_jit = xc._xla.jax_jit
+    collected = []
+
+    def make_cycle():
+      # A reference cycle that spans multiple C++ types:
+      # signature -> static_args -> device_list -> tuple -> duck_device
+      # -> signature.
+      class DuckDevice:
+        def __del__(self):
+          collected.append(True)
+
+      duck_device = DuckDevice()
+      device_list = xc.DeviceList((duck_device,))
+      signature, _ = jax_jit.parse_arguments(
+          (device_list,), [], (), (0,), [], default_registry)
+      duck_device.signature = signature
+
+    make_cycle()
+    gc.collect()
+    self.assertTrue(collected)
+
+  @unittest.skipIf(jaxlib_extension_version < 467, "Requires jaxlib >= 467")
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
   def test_loaded_executable_keep_alive_cycle_is_collected(self):
     collected = []
 

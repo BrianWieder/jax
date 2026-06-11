@@ -60,11 +60,15 @@ nb_class_ptr<WeakKeyWeakValueCache> WeakKeyWeakValueCache::Create(
 
 nb_class_ptr<WeakKeyWeakValueCache> WeakKeyWeakValueCache::Create(
     nb::callable fn) {
-  nb::callable fn_copy = fn;
-  auto self = Create([fn = std::move(fn)](nb::handle x) -> nb::object {
+  // The std::function captures only a borrowed handle; py_fn_ holds the one
+  // owning reference, where it is visible to the garbage collector via
+  // tp_traverse. A second, hidden strong reference inside the std::function
+  // would break the GC's reference accounting and make cycles through the
+  // callable uncollectable.
+  auto self = Create([fn = nb::handle(fn.ptr())](nb::handle x) -> nb::object {
     return fn(x);
   });
-  self->py_fn_ = std::move(fn_copy);
+  self->py_fn_ = std::move(fn);
   return self;
 }
 

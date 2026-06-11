@@ -1249,8 +1249,10 @@ PyObject* MultiWeakrefLRUCache::VectorCall(PyObject* self_obj,
 /*static*/ int MultiWeakrefLRUCache::tp_clear(PyObject* self_obj) {
   MultiWeakrefLRUCache* self = nb::inst_ptr<MultiWeakrefLRUCache>(self_obj);
   self->TpClear();
-  self->registry_.reset();
-  self->weak_types_.reset();
+  // Move the members into locals so that the decrefs at scope exit never
+  // observe a dangling pointer through this object's members.
+  nb::object registry = std::move(self->registry_);
+  nb::set weak_types = std::move(self->weak_types_);
   return 0;
 }
 

@@ -17,6 +17,7 @@ from functools import partial
 import gc
 import operator
 import threading
+import unittest
 
 from absl.testing import absltest, parameterized
 import jax
@@ -24,6 +25,9 @@ from jax import api_util
 from jax._src import linear_util as lu
 from jax._src import test_util as jtu
 from jax._src import util
+from jax._src.lib import _jax
+from jax._src.lib import jaxlib_extension_version
+from jax._src.lib import weakref_lru_cache as lib_weakref_lru_cache
 from jax._src.util import weakref_lru_cache
 jax.config.parse_flags_with_absl()
 
@@ -264,6 +268,90 @@ class UtilTest(jtu.JaxTestCase):
       t.start()
     for t in workers:
       t.join()
+
+
+@unittest.skipIf(jaxlib_extension_version < 467, "Requires jaxlib >= 467")
+class GcCycleTest(jtu.JaxTestCase):
+  """Tests that reference cycles through C++ cache objects are collected."""
+
+  def _assert_cycle_collected(self, make_cycle):
+    collected = []
+
+    class Canary:
+      def __del__(self):
+        collected.append(True)
+
+    make_cycle(Canary)
+    gc.collect()
+    self.assertTrue(collected)
+
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_weakref_lru_cache_reference_cycle_is_collected(self):
+    def make_cycle(canary_cls):
+      canary = canary_cls()
+
+      def fn(weak):
+        return (weak, canary)
+
+      cache = lib_weakref_lru_cache.weakref_lru_cache(lambda: None, fn, 16)
+      # Cycle: canary -> cache -> fn -> closure -> canary.
+      canary.cache = cache
+
+    self._assert_cycle_collected(make_cycle)
+
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_multi_weakref_lru_cache_reference_cycle_is_collected(self):
+    def make_cycle(canary_cls):
+      class WeakType:
+        pass
+
+      WeakType.canary = canary_cls()
+      cache = lib_weakref_lru_cache.multi_weakref_lru_cache(
+          lambda: None, lambda *args, **kwargs: None,
+          registry=jax.tree_util.default_registry, weak_types={WeakType})
+      # Cycle: WeakType -> cache -> weak_types -> WeakType.
+      WeakType.cache = cache
+
+    self._assert_cycle_collected(make_cycle)
+
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_weak_value_interner_reference_cycle_is_collected(self):
+    def make_cycle(canary_cls):
+      canary = canary_cls()
+
+      def fn(*args, **kwargs):
+        return (args, canary)
+
+      interner = lib_weakref_lru_cache.weak_value_interner(fn)
+      # Cycle: canary -> interner -> fn -> closure -> canary.
+      canary.interner = interner
+
+    self._assert_cycle_collected(make_cycle)
+
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_weak_key_weak_value_cache_reference_cycle_is_collected(self):
+    def make_cycle(canary_cls):
+      canary = canary_cls()
+
+      def fn(key):
+        return (key, canary)
+
+      cache = lib_weakref_lru_cache.weak_key_weak_value_cache(fn)
+      # Cycle: canary -> cache -> fn -> closure -> canary.
+      canary.cache = cache
+
+    self._assert_cycle_collected(make_cycle)
+
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_config_reference_cycle_is_collected(self):
+    def make_cycle(canary_cls):
+      canary = canary_cls()
+      config = _jax.config.Config(
+          'gc_cycle_test_config', canary, include_in_jit_key=False)
+      # Cycle: canary -> config -> global value entry -> canary.
+      canary.config = config
+
+    self._assert_cycle_collected(make_cycle)
 
 
 class SafeMapTest(jtu.JaxTestCase):
