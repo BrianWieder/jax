@@ -594,7 +594,13 @@ void PyLoadedExecutable::KeepAlive(nb::object obj) {
   PyLoadedExecutable* exec = nb::inst_ptr<PyLoadedExecutable>(self);
   // client_ is not cleared: ~PyLoadedExecutable() needs it to unlink this
   // executable from the client's list of live executables.
-  exec->keepalives_.clear();
+  //
+  // The keepalives are swapped into a local so that the decrefs at scope
+  // exit, which may run arbitrary Python code via finalizers, never observe
+  // this object in a partially cleared state.
+  // See https://github.com/python/cpython/issues/99537.
+  std::vector<nb::object> keepalives;
+  keepalives.swap(exec->keepalives_);
   return 0;
 }
 

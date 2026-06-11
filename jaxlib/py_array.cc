@@ -684,10 +684,15 @@ nanobind::object PyArrayResultHandler::Call(PyArray py_array) const {
     return 0;
   }
   PyArrayResultHandler* handler = nb::inst_ptr<PyArrayResultHandler>(self);
-  handler->aval_.reset();
-  handler->sharding_.reset();
-  handler->dtype_.reset();
-  handler->wrappers_.clear();
+  // Move the members into locals so that the decrefs at scope exit, which
+  // may run arbitrary Python code via finalizers, never observe this object
+  // in a partially cleared state.
+  // See https://github.com/python/cpython/issues/99537.
+  nb::object aval = std::move(handler->aval_);
+  nb::object sharding = std::move(handler->sharding_);
+  xla::nb_dtype dtype = std::move(handler->dtype_);
+  std::vector<nb::callable> wrappers;
+  wrappers.swap(handler->wrappers_);
   return 0;
 }
 

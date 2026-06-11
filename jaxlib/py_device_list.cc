@@ -484,12 +484,19 @@ PyDeviceList::MemoryKinds(nb_class_ptr<PyDeviceList> self) {
     return 0;
   }
   PyDeviceList* l = nb::inst_ptr<PyDeviceList>(self);
-  l->py_client_.reset();
-  if (auto* py_device_assignment = std::get_if<nb::tuple>(&l->device_list_)) {
-    py_device_assignment->reset();
+  // Move the members into locals so that the decrefs at scope exit, which
+  // may run arbitrary Python code via finalizers, never observe a dangling
+  // pointer through this object's members.
+  // See https://github.com/python/cpython/issues/99537.
+  nb_class_ptr<PyClient> py_client = std::move(l->py_client_);
+  nb::tuple py_device_assignment;
+  if (auto* tuple_ptr = std::get_if<nb::tuple>(&l->device_list_)) {
+    py_device_assignment = std::move(*tuple_ptr);
   }
-  l->addressable_device_list_.reset();
-  l->memory_kind_info_.reset();
+  std::optional<nb::object> addressable_device_list;
+  addressable_device_list.swap(l->addressable_device_list_);
+  std::optional<absl::StatusOr<MemoryKindInfo>> memory_kind_info;
+  memory_kind_info.swap(l->memory_kind_info_);
   return 0;
 }
 

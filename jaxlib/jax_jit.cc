@@ -414,10 +414,18 @@ int ArgumentSignature_tp_clear(PyObject* self) {
     return 0;
   }
   ArgumentSignature* s = nb::inst_ptr<ArgumentSignature>(self);
-  s->dynamic_arg_treedefs.clear();
-  s->dynamic_arg_names.clear();
-  s->static_args.clear();
-  s->static_arg_names.clear();
+  // Swap the members into locals so that the decrefs at scope exit, which
+  // may run arbitrary Python code via finalizers, never observe this object
+  // in a partially cleared state.
+  // See https://github.com/python/cpython/issues/99537.
+  absl::InlinedVector<PyTreeDef, 2> dynamic_arg_treedefs;
+  dynamic_arg_treedefs.swap(s->dynamic_arg_treedefs);
+  std::vector<nb::str> dynamic_arg_names;
+  dynamic_arg_names.swap(s->dynamic_arg_names);
+  std::vector<nb::object> static_args;
+  static_args.swap(s->static_args);
+  std::vector<nb::str> static_arg_names;
+  static_arg_names.swap(s->static_arg_names);
   return 0;
 }
 

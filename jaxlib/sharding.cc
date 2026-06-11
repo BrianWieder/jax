@@ -226,11 +226,16 @@ static void ClearInstanceDict(PyObject* self) {
     return 0;
   }
   NamedSharding* s = nb::inst_ptr<NamedSharding>(self);
-  s->mesh_.reset();
-  s->spec_.reset();
-  s->memory_kind_.reset();
-  s->logical_device_ids_.reset();
-  s->internal_device_list_.reset();
+  // Move the members into locals so that the decrefs at scope exit, which
+  // may run arbitrary Python code via finalizers, never observe a dangling
+  // pointer through this object's members.
+  // See https://github.com/python/cpython/issues/99537.
+  nb::object mesh = std::move(s->mesh_);
+  nb::object spec = std::move(s->spec_);
+  nb::object memory_kind = std::move(s->memory_kind_);
+  nb::object logical_device_ids = std::move(s->logical_device_ids_);
+  std::optional<nb_class_ptr<PyDeviceList>> internal_device_list;
+  internal_device_list.swap(s->internal_device_list_);
   s->hash_.tp_clear();
   return 0;
 }
@@ -327,9 +332,12 @@ SingleDeviceSharding::SingleDeviceSharding(nb::object device,
     return 0;
   }
   SingleDeviceSharding* s = nb::inst_ptr<SingleDeviceSharding>(self);
-  s->device_.reset();
-  s->memory_kind_.reset();
-  s->internal_device_list_.reset();
+  // Move the members into locals so that the decrefs at scope exit never
+  // observe a dangling pointer through this object's members.
+  nb::object device = std::move(s->device_);
+  nb::object memory_kind = std::move(s->memory_kind_);
+  nb_class_ptr<PyDeviceList> internal_device_list =
+      std::move(s->internal_device_list_);
   return 0;
 }
 
@@ -401,9 +409,12 @@ GSPMDSharding::GSPMDSharding(nb_class_ptr<PyDeviceList> devices,
     return 0;
   }
   GSPMDSharding* s = nb::inst_ptr<GSPMDSharding>(self);
-  s->devices_.reset();
-  s->memory_kind_.reset();
-  s->internal_device_list_.reset();
+  // Move the members into locals so that the decrefs at scope exit never
+  // observe a dangling pointer through this object's members.
+  nb_class_ptr<PyDeviceList> devices = std::move(s->devices_);
+  nb::object memory_kind = std::move(s->memory_kind_);
+  nb_class_ptr<PyDeviceList> internal_device_list =
+      std::move(s->internal_device_list_);
   return 0;
 }
 

@@ -419,12 +419,20 @@ void PyMpmdLoadedExecutable::SetupFastpath(nb::callable cache_miss,
     return 0;
   }
   PyMpmdLoadedExecutable* exec = nb::inst_ptr<PyMpmdLoadedExecutable>(self);
-  exec->backend_.reset();
-  exec->out_avals_.clear();
-  exec->out_dtypes_.clear();
-  exec->out_shardings_.clear();
-  exec->cache_miss_.reset();
-  exec->pytree_registry_.reset();
+  // Move the members into locals so that the decrefs at scope exit, which
+  // may run arbitrary Python code via finalizers, never observe this object
+  // in a partially cleared state.
+  // See https://github.com/python/cpython/issues/99537.
+  jax::nb_class_ptr<jax::PyClient> backend = std::move(exec->backend_);
+  std::vector<nb::object> out_avals;
+  out_avals.swap(exec->out_avals_);
+  std::vector<nb::object> out_dtypes;
+  out_dtypes.swap(exec->out_dtypes_);
+  std::vector<nb::object> out_shardings;
+  out_shardings.swap(exec->out_shardings_);
+  nb::callable cache_miss = std::move(exec->cache_miss_);
+  jax::nb_class_ptr<jax::PyTreeRegistry> pytree_registry =
+      std::move(exec->pytree_registry_);
   return 0;
 }
 
