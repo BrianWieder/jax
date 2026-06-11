@@ -16,6 +16,7 @@ import contextlib
 import gc
 import math
 import unittest
+import weakref
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -1099,6 +1100,22 @@ class ShardingTest(jtu.JaxTestCase):
     make_cycle()
     gc.collect()
     self.assertTrue(collected)
+
+  @unittest.skipIf(jaxlib_extension_version < 467, "Requires jaxlib >= 467")
+  @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
+  def test_client_device_reference_cycle_is_collected(self):
+    # A throwaway CPU client that is never registered as a jax backend, so
+    # nothing outside its own reference cycles keeps it alive. Materializing
+    # device and memory wrappers creates the intrinsic cycles
+    # client -> device -> client and client -> memory -> client through the
+    # client's wrapper caches.
+    client = xc.make_cpu_client()
+    client_ref = weakref.ref(client)
+    device = client.devices()[0]
+    memory = device.addressable_memories()[0]
+    del client, device, memory
+    gc.collect()
+    self.assertIsNone(client_ref())
 
   @unittest.skipIf(jaxlib_extension_version < 467, "Requires jaxlib >= 467")
   @jtu.thread_unsafe_test()  # GC effects aren't predictable with threads
